@@ -1,15 +1,124 @@
 """Mission Control dashboard.   Run:  streamlit run dashboard/app.py"""
 import sys, time, pathlib
+import cv2
+import numpy as np
+from crater.perception import detect
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import pandas as pd
 import streamlit as st
-from crater.config import LinkParams
+from crater.config import Camera, LinkParams
 from crater.channel import expected_loss
 from crater.pipeline import Mission, evaluate
 from dashboard.plots import map_figure, annotate_frame
 
 st.set_page_config(page_title="C.R.A.T.E.R. Mission Control", layout="wide")
 st.title("C.R.A.T.E.R. - Mission Control")
+
+st.divider()
+st.header("Image Lab — Test a real image")
+
+uploaded = st.file_uploader(
+    "Upload a lunar image",
+    type=["jpg", "jpeg", "png"],
+    help="Upload a local image to test CRATER's experimental candidate detector."
+)
+
+if uploaded is not None:
+    file_bytes = np.frombuffer(uploaded.getvalue(), dtype=np.uint8)
+    image_bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+
+    if image_bgr is None:
+        st.error("Could not read this image. Try another JPG or PNG.")
+    else:
+        # Limit image size to keep processing responsive.
+        h, w = image_bgr.shape[:2]
+        scale = min(1.0, 1600 / max(h, w))
+
+        if scale < 1.0:
+            image_bgr = cv2.resize(
+                image_bgr,
+                (int(w * scale), int(h * scale))
+            )
+
+        h, w = image_bgr.shape[:2]
+        gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+
+        # Provisional camera assumptions, not real-image calibration.
+        camera = Camera(width=w, height=h)
+
+        try:
+            detections = detect(gray, camera, terrain=None)
+
+            annotated = image_bgr.copy()
+
+            for i, d in enumerate(detections, start=1):
+                x, y, bw, bh = d.bbox
+                cv2.rectangle(
+                    annotated, (x, y), (x + bw, y + bh),
+                    (0, 255, 0), 2
+                )
+                cv2.putText(
+                    annotated,
+                    f"Candidate {i}: {d.conf:.2f}",
+                    (x, max(20, y - 8)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5, (0, 255, 0), 1, cv2.LINE_AA
+                )
+
+            col_original, col_result = st.columns(2)
+
+            with col_original:
+                st.subheader("Uploaded image")
+                st.image(
+                    cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB),
+                    use_container_width=True
+                )
+
+            with col_result:
+                st.subheader("Candidate detections")
+                st.image(
+                    cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB),
+                    use_container_width=True
+                )
+
+            st.metric("Candidate regions", len(detections))
+
+            if detections:
+                st.dataframe(
+                    [
+                        {
+                            "Candidate": i,
+                            "Pixel X": round(d.u, 1),
+                            "Pixel Y": round(d.v, 1),
+                            "Confidence": round(d.conf, 3),
+                            "Provisional class": (
+                                "Crater candidate" if d.cls == 1
+                                else "Rock candidate"
+                            ),
+                            "Bounding box": str(d.bbox),
+                        }
+                        for i, d in enumerate(detections, start=1)
+                    ],
+                    hide_index=True
+                )
+            else:
+                st.warning(
+                    "No candidate regions detected. This does not prove "
+                    "the image contains no hazards."
+                )
+
+            st.caption(
+                "Experimental classical computer vision. The confidence "
+                "score is not a calibrated probability. Pixel detections "
+                "are shown; metric size and real-world position are not "
+                "validated for this image."
+            )
+
+        except Exception as exc:
+            st.error(f"Image analysis failed: {exc}")
+
+st.divider()
+
 st.caption("Edge perception -> homography -> 64-byte telemetry -> lossy link -> uncertainty-aware map")
 
 with st.sidebar:
