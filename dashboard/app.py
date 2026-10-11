@@ -7,7 +7,7 @@ import sys
 import time
 import pathlib
 
-sys.path.insert(0, str(pathlib.Path(_file_).resolve().parents[1]))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import pandas as pd
 import streamlit as st
