@@ -1,181 +1,527 @@
-"""Mission Control dashboard.   Run:  streamlit run dashboard/app.py"""
-import sys, time, pathlib
-import cv2
-import numpy as np
-from crater.perception import detect
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+"""C.R.A.T.E.R. Mission Control
+Run from the project root:
+    streamlit run dashboard/app.py
+"""
+
+import sys
+import time
+import pathlib
+
+sys.path.insert(0, str(pathlib.Path(_file_).resolve().parents[1]))
+
 import pandas as pd
 import streamlit as st
-from crater.config import Camera, LinkParams
+
+from crater.config import LinkParams
 from crater.channel import expected_loss
 from crater.pipeline import Mission, evaluate
+from crater.replay import ReplayMission
 from dashboard.plots import map_figure, annotate_frame
 
-st.set_page_config(page_title="C.R.A.T.E.R. Mission Control", layout="wide")
-st.title("C.R.A.T.E.R. - Mission Control")
 
-st.divider()
-st.header("Image Lab — Test a real image")
+# ───────────────────── Page configuration ─────────────────────
 
-uploaded = st.file_uploader(
-    "Upload a lunar image",
-    type=["jpg", "jpeg", "png"],
-    help="Upload a local image to test CRATER's experimental candidate detector."
+st.set_page_config(
+    page_title="C.R.A.T.E.R. | Mission Control",
+    page_icon="🛰️",
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
 
-if uploaded is not None:
-    file_bytes = np.frombuffer(uploaded.getvalue(), dtype=np.uint8)
-    image_bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+st.markdown(
+    """
+    <style>
+    :root {
+        --bg: #080d17;
+        --panel: #101a2a;
+        --panel-light: #152238;
+        --line: #24344b;
+        --cyan: #57d7ed;
+        --text: #e8f0fa;
+        --muted: #91a3bb;
+    }
 
-    if image_bgr is None:
-        st.error("Could not read this image. Try another JPG or PNG.")
-    else:
-        # Limit image size to keep processing responsive.
-        h, w = image_bgr.shape[:2]
-        scale = min(1.0, 1600 / max(h, w))
+    .stApp {
+        background:
+            radial-gradient(ellipse at 50% -20%, #172943 0%, #080d17 60%);
+        color: var(--text);
+    }
 
-        if scale < 1.0:
-            image_bgr = cv2.resize(
-                image_bgr,
-                (int(w * scale), int(h * scale))
-            )
+    [data-testid="stHeader"] {
+        background: transparent;
+    }
 
-        h, w = image_bgr.shape[:2]
-        gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    [data-testid="stSidebar"] {
+        background: #0b1220;
+        border-right: 1px solid #1d2a3d;
+    }
 
-        # Provisional camera assumptions, not real-image calibration.
-        camera = Camera(width=w, height=h)
+    [data-testid="stSidebar"] > div {
+        padding-top: 1.2rem;
+    }
 
-        try:
-            detections = detect(gray, camera, terrain=None)
+    .block-container {
+        padding-top: 1.5rem;
+        padding-bottom: 2rem;
+        max-width: 1800px;
+    }
 
-            annotated = image_bgr.copy()
+    h1, h2, h3 {
+        color: var(--text);
+        letter-spacing: -0.035em;
+    }
 
-            for i, d in enumerate(detections, start=1):
-                x, y, bw, bh = d.bbox
-                cv2.rectangle(
-                    annotated, (x, y), (x + bw, y + bh),
-                    (0, 255, 0), 2
-                )
-                cv2.putText(
-                    annotated,
-                    f"Candidate {i}: {d.conf:.2f}",
-                    (x, max(20, y - 8)),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.5, (0, 255, 0), 1, cv2.LINE_AA
-                )
+    .hero {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+        padding: 8px 0 18px 0;
+    }
 
-            col_original, col_result = st.columns(2)
+    .eyebrow {
+        color: var(--cyan);
+        font-size: 0.69rem;
+        font-weight: 800;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+    }
 
-            with col_original:
-                st.subheader("Uploaded image")
-                st.image(
-                    cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB),
-                    use_container_width=True
-                )
+    .hero-title {
+        color: #f2f7ff;
+        font-size: clamp(1.8rem, 3vw, 2.65rem);
+        line-height: 1.1;
+        font-weight: 800;
+        letter-spacing: -0.055em;
+        margin: 0;
+    }
 
-            with col_result:
-                st.subheader("Candidate detections")
-                st.image(
-                    cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB),
-                    use_container_width=True
-                )
+    .hero-subtitle {
+        color: var(--muted);
+        font-size: 0.88rem;
+        margin-top: 3px;
+    }
 
-            st.metric("Candidate regions", len(detections))
+    .status-wrap {
+        display: flex;
+        justify-content: flex-end;
+        padding-top: 8px;
+    }
 
-            if detections:
-                st.dataframe(
-                    [
-                        {
-                            "Candidate": i,
-                            "Pixel X": round(d.u, 1),
-                            "Pixel Y": round(d.v, 1),
-                            "Confidence": round(d.conf, 3),
-                            "Provisional class": (
-                                "Crater candidate" if d.cls == 1
-                                else "Rock candidate"
-                            ),
-                            "Bounding box": str(d.bbox),
-                        }
-                        for i, d in enumerate(detections, start=1)
-                    ],
-                    hide_index=True
-                )
-            else:
-                st.warning(
-                    "No candidate regions detected. This does not prove "
-                    "the image contains no hazards."
-                )
+    .status-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        border: 1px solid #31516a;
+        border-radius: 999px;
+        background: #102638;
+        color: #8ce9f4;
+        padding: 7px 12px;
+        font-size: 0.69rem;
+        font-weight: 800;
+        letter-spacing: 0.09em;
+        white-space: nowrap;
+    }
 
-            st.caption(
-                "Experimental classical computer vision. The confidence "
-                "score is not a calibrated probability. Pixel detections "
-                "are shown; metric size and real-world position are not "
-                "validated for this image."
-            )
+    .status-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #57d7ed;
+        display: inline-block;
+    }
 
-        except Exception as exc:
-            st.error(f"Image analysis failed: {exc}")
+    .section-label {
+        color: #b7c7db;
+        font-size: 0.72rem;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        margin: 12px 0 8px 0;
+    }
+
+    .section-note {
+        color: var(--muted);
+        font-size: 0.78rem;
+        margin: -3px 0 10px 0;
+    }
+
+    [data-testid="stMetric"] {
+        background: linear-gradient(145deg, #111d30, #0d1625);
+        border: 1px solid #22344b;
+        border-radius: 12px;
+        padding: 14px 15px;
+        min-height: 105px;
+    }
+
+    [data-testid="stMetricLabel"] {
+        color: #9aadc4;
+        font-size: 0.75rem;
+    }
+
+    [data-testid="stMetricValue"] {
+        color: #edf6ff;
+        font-size: clamp(1.25rem, 1.8vw, 1.8rem);
+        font-weight: 750;
+    }
+
+    [data-testid="stMetricDelta"] {
+        font-size: 0.73rem;
+    }
+
+    [data-testid="stProgressBar"] > div {
+        background: #17263a;
+        border-radius: 20px;
+    }
+
+    [data-testid="stProgressBar"] > div > div {
+        background: linear-gradient(90deg, #2c9fb9, #67e4f0);
+        border-radius: 20px;
+    }
+
+    [data-testid="stDataFrame"] {
+        border: 1px solid #22344b;
+        border-radius: 10px;
+        overflow: hidden;
+    }
+
+    div.stButton > button[kind="primary"] {
+        background: linear-gradient(100deg, #168ba8, #27b8cb);
+        border: none;
+        color: #04131c;
+        font-weight: 850;
+        letter-spacing: 0.05em;
+        min-height: 44px;
+        border-radius: 9px;
+        transition: filter 0.2s ease;
+    }
+
+    div.stButton > button[kind="primary"]:hover {
+        filter: brightness(1.13);
+        border: none;
+        color: #04131c;
+    }
+
+    div[data-testid="stAlert"] {
+        border-radius: 10px;
+    }
+
+    hr {
+        border-color: #203047;
+        margin: 0.8rem 0 1rem 0;
+    }
+
+    footer {
+        visibility: hidden;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+# ─────────────────────────── Sidebar ───────────────────────────
+
+with st.sidebar:
+    st.markdown(
+        """
+        <div class="eyebrow">C.R.A.T.E.R. / CONTROL</div>
+        <h2 style="margin:5px 0 0 0;">Mission setup</h2>
+        <p style="color:#91a3bb;font-size:0.8rem;">
+            Configure the simulation environment.
+        </p>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.divider()
+
+    st.markdown("*01 · SCENARIO*")
+    seed = st.number_input("Scene seed", 0, 999, 7)
+    n_frames = st.slider("Mission frames", 4, 20, 12)
+    use_replay = st.checkbox(
+        "Rover camera: prepared image sequence",
+        value=True,
+        help="Plays saved rover camera frames from disk through the pipeline. Off = images are rendered live.",
+    )
+
+    st.markdown("*02 · COMMUNICATION LINK*")
+    p_gb = st.slider("Good → Bad transition", 0.0, 0.6, 0.10, 0.01)
+    p_bg = st.slider("Bad → Good transition", 0.05, 1.0, 0.30, 0.05)
+    loss_bad = st.slider("Packet loss in Bad state", 0.0, 1.0, 0.80, 0.05)
+    repeat = st.slider("Redundant packet copies", 1, 3, 1)
+
+    link = LinkParams(
+        p_gb=p_gb,
+        p_bg=p_bg,
+        loss_bad=loss_bad,
+    )
+
+    st.info(f"Estimated packet loss: *{expected_loss(link):.0%}*")
+
+    st.markdown("*03 · LOCALISATION*")
+    terrain_aware = st.checkbox(
+        "Terrain-aware ray-casting",
+        value=True,
+        help="Off uses classic flat-ground homography.",
+    )
+    relief = st.slider("Terrain relief scale", 0.0, 2.0, 1.0, 0.1)
+
+    st.markdown("*04 · DISPLAY*")
+    show_dem = st.checkbox("Terrain hillshade and contours", True)
+    min_trust = st.slider("Minimum hazard trust", 0.0, 0.5, 0.10, 0.01)
+    show_truth = st.checkbox("Show ground truth", True)
+    delay = st.slider("Frame interval (seconds)", 0.0, 1.0, 0.25, 0.05)
+
+    st.markdown("")
+    run = st.button(
+        "▶️  RUN MISSION",
+        type="primary",
+        use_container_width=True,
+    )
+
+    st.caption("SIMULATION ENVIRONMENT · LOCAL EXECUTION")
+
+
+# ───────────────────────── Main header ─────────────────────────
+
+header_left, header_right = st.columns([4, 1])
+
+with header_left:
+    st.markdown(
+        """
+        <div class="hero">
+            <div class="eyebrow">Autonomous perception · Telemetry · Mapping</div>
+            <div class="hero-title">Mission Control</div>
+            <div class="hero-subtitle">
+                Edge detection → telemetry link → uncertainty-aware ground map
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+with header_right:
+    status_slot = st.empty()
+    status_slot.markdown(
+        """
+        <div class="status-wrap">
+            <div class="status-pill">
+                <span class="status-dot"></span> STANDBY
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 st.divider()
 
-st.caption("Edge perception -> homography -> 64-byte telemetry -> lossy link -> uncertainty-aware map")
 
-with st.sidebar:
-    st.header("Simulation")
-    seed = st.number_input("Scene seed", 0, 999, 7)
-    n_frames = st.slider("Frames", 4, 20, 12)
-    st.header("Radio link (Gilbert-Elliott)")
-    p_gb = st.slider("P(Good->Bad)", 0.0, 0.6, 0.10, 0.01)
-    p_bg = st.slider("P(Bad->Good)", 0.05, 1.0, 0.30, 0.05)
-    loss_bad = st.slider("Loss in Bad state", 0.0, 1.0, 0.80, 0.05)
-    repeat = st.slider("Redundant copies per packet", 1, 3, 1)
-    link = LinkParams(p_gb=p_gb, p_bg=p_bg, loss_bad=loss_bad)
-    st.info(f"Expected packet loss: **{expected_loss(link):.0%}**")
-    st.header("Localisation")
-    terrain_aware = st.checkbox("Terrain-aware (DEM ray-casting)", True,
-                                help="Off = classic flat-ground homography. Compare the position error in the scoring line.")
-    relief = st.slider("Terrain relief x", 0.0, 2.0, 1.0, 0.1)
-    st.header("Display")
-    show_dem = st.checkbox("Show DEM hillshade + contours", True)
-    min_trust = st.slider("Hide hazards with trust below", 0.0, 0.5, 0.10, 0.01)
-    show_truth = st.checkbox("Show simulator ground truth (grey)", True)
-    delay = st.slider("Seconds per frame (animation)", 0.0, 1.0, 0.25, 0.05)
-    run = st.button("Run mission", type="primary")
+# ───────────────────── Reusable display areas ──────────────────
 
-top = st.empty()
-col_map, col_cam = st.columns([1.1, 1])
-map_slot, cam_slot, table_slot = col_map.empty(), col_cam.empty(), col_cam.empty()
+st.markdown('<div class="section-label">Live telemetry</div>', unsafe_allow_html=True)
+
+metric_columns = st.columns(6)
+metric_slots = [column.empty() for column in metric_columns]
+
+progress_slot = st.empty()
+
+map_column, camera_column = st.columns([1.15, 1], gap="large")
+
+with map_column:
+    st.markdown('<div class="section-label">01 / Ground situation</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="section-note">Hazard positions, uncertainty and trajectory.</div>',
+        unsafe_allow_html=True,
+    )
+    map_slot = st.empty()
+
+with camera_column:
+    st.markdown('<div class="section-label">02 / Edge perception</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="section-note">Onboard camera and detection overlays.</div>',
+        unsafe_allow_html=True,
+    )
+    cam_slot = st.empty()
+
+st.markdown('<div class="section-label">Detected hazard register</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="section-note">Latest received observations, ordered by trust.</div>',
+    unsafe_allow_html=True,
+)
+table_slot = st.empty()
+
+st.markdown('<div class="section-label">Mission assessment</div>', unsafe_allow_html=True)
+score_slot = st.empty()
 
 
-def draw(m, res, snap, final=False):
-    ls, ss = m.link.stats, m.station.stats
-    c = top.columns(6)
-    c[0].metric("Packets sent", ls["sent"], f"{ls['bytes_sent']} B")
-    c[1].metric("Received OK", ss["rx_packets"])
-    c[2].metric("Lost in air", ls["dropped"])
-    c[3].metric("CRC rejects", ss["crc_fail"])
-    c[4].metric("Hazards shown", len(snap))
-    c[5].metric("Oldest data", f"{max([s['age'] for s in snap], default=0):.0f} s")
-    map_slot.pyplot(map_figure(snap, m.poses[:res["i"] + 1], m.scene.hazards if show_truth else None, res["now"], terrain=m.terrain if show_dem else None), clear_figure=True)
-    cam_slot.image(annotate_frame(res["img"], res["info"]), caption=f"Edge camera, frame {res['i']} (detections BEFORE the lossy link)")
+# ───────────────────────── Render functions ────────────────────
+
+def render_metrics(m, snap):
+    """Update the existing telemetry cells rather than adding new ones."""
+    link_stats = m.link.stats
+    station_stats = m.station.stats
+
+    metrics = [
+        ("Packets sent", link_stats["sent"], f'{link_stats["bytes_sent"]} bytes'),
+        ("Received OK", station_stats["rx_packets"], None),
+        ("Lost in air", link_stats["dropped"], None),
+        ("CRC rejects", station_stats["crc_fail"], None),
+        ("Hazards tracked", len(snap), None),
+        (
+            "Data age",
+            f'{max((item["age"] for item in snap), default=0):.1f} s',
+            None,
+        ),
+    ]
+
+    for slot, (label, value, help_text) in zip(metric_slots, metrics):
+        slot.metric(label, value, help=help_text)
+
+
+def render_frame(m, result, snap, frame_index):
+    """Refresh the dashboard in place for the current mission frame."""
+    render_metrics(m, snap)
+
+    progress_slot.progress(
+        (frame_index + 1) / n_frames,
+        text=f"Mission progress · Frame {frame_index + 1} of {n_frames}",
+    )
+
+    map_slot.pyplot(
+        map_figure(
+            snap,
+            m.poses[: result["i"] + 1],
+            m.scene.hazards if show_truth else None,
+            result["now"],
+            terrain=m.terrain if show_dem else None,
+        ),
+        clear_figure=True,
+        use_container_width=True,
+    )
+
+    cam_slot.image(
+        annotate_frame(result["img"], result["info"]),
+        caption=f"Rover camera · frame {result['i'] + 1} · "
+                f"{'loaded from prepared sequence' if use_replay else 'rendered live'} · "
+                f"{len(result['info'])} hazards detected on-board",
+        use_container_width=True,
+    )
+
     if snap:
-        df = pd.DataFrame(snap)[["id", "cls", "x", "y", "z", "r", "sig_major", "sig_minor", "age", "trust", "n_obs"]].round(2)
-        table_slot.dataframe(df.sort_values("trust", ascending=False), hide_index=True)
+        columns = [
+            "id", "cls", "x", "y", "z", "r",
+            "sig_major", "sig_minor", "age", "trust", "n_obs",
+        ]
+        df = pd.DataFrame(snap)[columns].round(2)
+        df = df.sort_values("trust", ascending=False)
 
+        table_slot.dataframe(
+            df,
+            hide_index=True,
+            use_container_width=True,
+        )
+    else:
+        table_slot.info(
+            "No hazards currently meet the selected trust threshold."
+        )
+
+
+def render_assessment(result, mission):
+    """Show final simulator metrics after the mission completes."""
+    score_slot.empty()
+
+    with score_slot.container():
+        c1, c2, c3, c4 = st.columns(4)
+
+        c1.metric("Recall", f"{result['recall']:.0%}")
+        c2.metric("Precision", f"{result['precision']:.0%}")
+        c3.metric("Position RMSE", f"{result['rmse_m']:.2f} m")
+        c4.metric("Elevation RMSE", f"{result['rmse_z_m']:.2f} m")
+
+        st.caption(
+            f"Scoring uses simulator ground truth · "
+            f"{result['n_gt']} observable hazards · "
+            f"Final assessment only"
+        )
+
+
+# ───────────────────────── Mission execution ───────────────────
 
 if run:
-    m = Mission(n_frames=n_frames, seed=int(seed), link=link, repeat=repeat, terrain_aware=terrain_aware, relief=relief)
+    status_slot.markdown(
+        """
+        <div class="status-wrap">
+            <div class="status-pill">
+                <span class="status-dot"></span> MISSION ACTIVE
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    score_slot.info("Mission assessment will appear when the simulation finishes.")
+
+    MissionClass = ReplayMission if use_replay else Mission
+    mission = MissionClass(
+        n_frames=n_frames,
+        seed=int(seed),
+        link=link,
+        repeat=repeat,
+        terrain_aware=terrain_aware,
+        relief=relief,
+    )
+
+    result = None
+
     for i in range(n_frames):
-        res = m.step(i)
-        draw(m, res, m.station.snapshot(res["now"], min_trust))
-        time.sleep(delay)
-    for t_rx, raw in m.link.poll(1e9):
-        m.station.ingest(raw, t_rx)
-    snap = m.station.snapshot(res["now"], min_trust)
-    draw(m, res, snap, True)
-    ev = evaluate(snap, m)
-    st.success(f"Simulator scoring (uses hidden ground truth): recall {ev['recall']:.0%}, precision {ev['precision']:.0%}, "
-               f"position RMSE {ev['rmse_m']:.2f} m, elevation RMSE {ev['rmse_z_m']:.2f} m over {ev['n_gt']} observable hazards.")
+        result = mission.step(i)
+        snapshot = mission.station.snapshot(result["now"], min_trust)
+
+        render_frame(mission, result, snapshot, i)
+
+        if delay > 0:
+            time.sleep(delay)
+
+    # Flush remaining packets, matching the existing simulator workflow.
+    for receive_time, raw_packet in mission.link.poll(1e9):
+        mission.station.ingest(raw_packet, receive_time)
+
+    snapshot = mission.station.snapshot(result["now"], min_trust)
+
+    render_frame(mission, result, snapshot, n_frames - 1)
+
+    assessment = evaluate(snapshot, mission)
+    render_assessment(assessment, mission)
+
+    status_slot.markdown(
+        """
+        <div class="status-wrap">
+            <div class="status-pill">
+                <span class="status-dot"></span> MISSION COMPLETE
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 else:
-    st.write("Set the link parameters on the left and press **Run mission**.")
+    for slot, label, value in zip(
+        metric_slots,
+        [
+            "Packets sent",
+            "Received OK",
+            "Lost in air",
+            "CRC rejects",
+            "Hazards tracked",
+            "Data age",
+        ],
+        ["—", "—", "—", "—", "—", "—"],
+    ):
+        slot.metric(label, value)
+
+    progress_slot.progress(0, text="Awaiting mission launch")
+
+    map_slot.info("The ground situation map will appear after launch.")
+    cam_slot.info("The onboard camera feed will appear after launch.")
+    table_slot.info("Hazard observations will appear here.")
+    score_slot.caption("Final performance metrics will appear after the mission.")
