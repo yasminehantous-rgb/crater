@@ -1,3 +1,4 @@
+
 """C.R.A.T.E.R. Mission Control
 Run from the project root:
     streamlit run dashboard/app.py
@@ -235,7 +236,7 @@ with st.sidebar:
 
     st.divider()
 
-    st.markdown("*01 · SCENARIO*")
+    st.markdown("**01 · SCENARIO**")
     seed = st.number_input("Scene seed", 0, 999, 7)
     n_frames = st.slider("Mission frames", 4, 20, 12)
     use_replay = st.checkbox(
@@ -244,7 +245,7 @@ with st.sidebar:
         help="Plays saved rover camera frames from disk through the pipeline. Off = images are rendered live.",
     )
 
-    st.markdown("*02 · COMMUNICATION LINK*")
+    st.markdown("**02 · COMMUNICATION LINK**")
     p_gb = st.slider("Good → Bad transition", 0.0, 0.6, 0.10, 0.01)
     p_bg = st.slider("Bad → Good transition", 0.05, 1.0, 0.30, 0.05)
     loss_bad = st.slider("Packet loss in Bad state", 0.0, 1.0, 0.80, 0.05)
@@ -256,9 +257,9 @@ with st.sidebar:
         loss_bad=loss_bad,
     )
 
-    st.info(f"Estimated packet loss: *{expected_loss(link):.0%}*")
+    st.info(f"Estimated packet loss: **{expected_loss(link):.0%}**")
 
-    st.markdown("*03 · LOCALISATION*")
+    st.markdown("**03 · LOCALISATION**")
     terrain_aware = st.checkbox(
         "Terrain-aware ray-casting",
         value=True,
@@ -266,7 +267,7 @@ with st.sidebar:
     )
     relief = st.slider("Terrain relief scale", 0.0, 2.0, 1.0, 0.1)
 
-    st.markdown("*04 · DISPLAY*")
+    st.markdown("**04 · DISPLAY**")
     show_dem = st.checkbox("Terrain hillshade and contours", True)
     min_trust = st.slider("Minimum hazard trust", 0.0, 0.5, 0.10, 0.01)
     show_truth = st.checkbox("Show ground truth", True)
@@ -274,7 +275,7 @@ with st.sidebar:
 
     st.markdown("")
     run = st.button(
-        "▶️  RUN MISSION",
+        "▶  RUN MISSION",
         type="primary",
         use_container_width=True,
     )
@@ -543,3 +544,4 @@ else:
     cam_slot.info("The onboard camera feed will appear after launch.")
     table_slot.info("Hazard observations will appear here.")
     score_slot.caption("Final performance metrics will appear after the mission.")
+
