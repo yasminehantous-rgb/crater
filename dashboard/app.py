@@ -7,7 +7,7 @@ import sys
 import time
 import pathlib
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(pathlib.Path(_file_).resolve().parents[1]))
 
 import pandas as pd
 import streamlit as st
@@ -25,7 +25,7 @@ st.set_page_config(
     page_title="C.R.A.T.E.R. | Mission Control",
     page_icon="🛰️",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 st.markdown(
@@ -282,6 +282,14 @@ with st.sidebar:
     st.caption("SIMULATION ENVIRONMENT · LOCAL EXECUTION")
 
 
+AUTOPLAY = True   # True: the mission starts by itself when the page opens (no click needed in front of the judges)
+if AUTOPLAY and "autoplayed" not in st.session_state:
+    st.session_state["autoplayed"] = True
+    run = True
+
+frame_history = []   # recent annotated camera frames for the filmstrip
+
+
 # ───────────────────────── Main header ─────────────────────────
 
 header_left, header_right = st.columns([4, 1])
@@ -325,10 +333,10 @@ metric_slots = [column.empty() for column in metric_columns]
 
 progress_slot = st.empty()
 
-map_column, camera_column = st.columns([1.15, 1], gap="large")
+camera_column, map_column = st.columns([1.15, 1], gap="large")
 
 with map_column:
-    st.markdown('<div class="section-label">01 / Ground situation</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-label">02 / Ground situation</div>', unsafe_allow_html=True)
     st.markdown(
         '<div class="section-note">Hazard positions, uncertainty and trajectory.</div>',
         unsafe_allow_html=True,
@@ -336,12 +344,13 @@ with map_column:
     map_slot = st.empty()
 
 with camera_column:
-    st.markdown('<div class="section-label">02 / Edge perception</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-label">01 / Rover camera · live feed</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="section-note">Onboard camera and detection overlays.</div>',
+        '<div class="section-note">Frames from the rover camera with on-board hazard detections.</div>',
         unsafe_allow_html=True,
     )
     cam_slot = st.empty()
+    strip_slot = st.empty()
 
 st.markdown('<div class="section-label">Detected hazard register</div>', unsafe_allow_html=True)
 st.markdown(
@@ -406,6 +415,13 @@ def render_frame(m, result, snap, frame_index):
                 f"{len(result['info'])} hazards detected on-board",
         use_container_width=True,
     )
+
+    recent = frame_history[-4:]
+    if recent:
+        with strip_slot.container():
+            strip_cols = st.columns(4)
+            for col, (im, k) in zip(strip_cols, recent):
+                col.image(im, caption=f"Frame {k + 1}", use_container_width=True)
 
     if snap:
         columns = [
@@ -473,8 +489,10 @@ if run:
 
     result = None
 
+    frame_history.clear()
     for i in range(n_frames):
         result = mission.step(i)
+        frame_history.append((annotate_frame(result["img"], result["info"]), i))
         snapshot = mission.station.snapshot(result["now"], min_trust)
 
         render_frame(mission, result, snapshot, i)
